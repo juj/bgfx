@@ -33,6 +33,22 @@
 			|| BX_PLATFORM_WINDOWS \
 			)
 
+#ifdef __EMSCRIPTEN__
+#define BGFX_GL_PROFILER_BEGIN(_view, _abgr)                                               \
+	BX_MACRO_BLOCK_BEGIN                                                                   \
+		BGFX_PROFILER_BEGIN(s_viewName[view], _abgr);                                      \
+	BX_MACRO_BLOCK_END
+
+#define BGFX_GL_PROFILER_BEGIN_LITERAL(_name, _abgr)                                       \
+	BX_MACRO_BLOCK_BEGIN                                                                   \
+		BGFX_PROFILER_BEGIN_LITERAL("" # _name, _abgr);                                    \
+	BX_MACRO_BLOCK_END
+
+#define BGFX_GL_PROFILER_END()        \
+	BX_MACRO_BLOCK_BEGIN              \
+		BGFX_PROFILER_END();          \
+	BX_MACRO_BLOCK_END
+#else
 #define BGFX_GL_PROFILER_BEGIN(_view, _abgr)                                               \
 	BX_MACRO_BLOCK_BEGIN                                                                   \
 		GL_CHECK(glPushDebugGroup(GL_DEBUG_SOURCE_APPLICATION, 0, -1, s_viewName[view]) ); \
@@ -50,6 +66,7 @@
 		BGFX_PROFILER_END();          \
 		GL_CHECK(glPopDebugGroup() ); \
 	BX_MACRO_BLOCK_END
+#endif
 
 #if BGFX_CONFIG_RENDERER_OPENGL
 #	if BGFX_CONFIG_RENDERER_OPENGL >= 31
@@ -1099,6 +1116,9 @@ namespace bgfx { namespace gl
 {
 	void dumpExtensions(const char* _extensions);
 
+	void lazyEnableVertexAttribArray(GLuint index);
+	void lazyDisableVertexAttribArray(GLuint index);
+
 	const char* glEnumName(GLenum _enum);
 
 #define _GL_CHECK(_check, _call) \
@@ -1397,7 +1417,7 @@ namespace bgfx { namespace gl
 				{
 					Attrib::Enum attr = Attrib::Enum(m_unboundUsedAttrib[ii]);
 					GLint loc = m_attributes[attr];
-					GL_CHECK(glDisableVertexAttribArray(loc) );
+					GL_CHECK(lazyDisableVertexAttribArray(loc) );
 				}
 			}
 		}

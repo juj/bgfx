@@ -4,6 +4,7 @@
  */
 
 #include "bgfx_p.h"
+#include <stdio.h>
 
 #if (BGFX_CONFIG_RENDERER_OPENGLES || BGFX_CONFIG_RENDERER_OPENGL)
 #	include "renderer_gl.h"
@@ -1179,6 +1180,69 @@ namespace bgfx { namespace gl
 		return 0 == err ? result : 0;
 	}
 
+	static uint64_t currentlyEnabledVertexAttribArrays = 0;
+	static uint64_t vertexAttribArraysPendingDisable = 0;
+	static uint64_t vertexAttribArraysPendingEnable = 0;
+
+	void lazyEnableVertexAttribArray(GLuint index)
+	{
+#if BX_PLATFORM_EMSCRIPTEN
+		// On WebGL platform calling out to WebGL API is detrimental to performance, so optimize
+		// out redundant API calls to glEnable/DisableVertexAttribArray.
+		if (index >= 64)
+		{
+			glEnableVertexAttribArray(index);
+			return;
+		}
+		uint64_t mask = 1ULL << index;
+		vertexAttribArraysPendingEnable |= mask & (~currentlyEnabledVertexAttribArrays);
+		vertexAttribArraysPendingDisable &= ~mask;
+#else
+		glEnableVertexAttribArray(index);
+#endif		
+	}
+
+	void lazyDisableVertexAttribArray(GLuint index)
+	{
+#if BX_PLATFORM_EMSCRIPTEN
+		// On WebGL platform calling out to WebGL API is detrimental to performance, so optimize
+		// out redundant API calls to glEnable/DisableVertexAttribArray.
+		if (index >= 64)
+		{
+			glDisableVertexAttribArray(index);
+			return;
+		}
+		uint64_t mask = 1ULL << index;
+		vertexAttribArraysPendingDisable |= mask & currentlyEnabledVertexAttribArrays;
+		vertexAttribArraysPendingEnable &= ~mask;
+#else
+		glDisableVertexAttribArray(index);
+#endif
+	}
+
+	void applyLazyEnabledVertexAttributes()
+	{
+#if BX_PLATFORM_EMSCRIPTEN
+		while(vertexAttribArraysPendingDisable)
+		{
+			int index = __builtin_ctzll(vertexAttribArraysPendingDisable);
+			uint64_t mask = ~(1ULL << index);
+			vertexAttribArraysPendingDisable &= mask;
+			currentlyEnabledVertexAttribArrays &= mask;
+			glDisableVertexAttribArray(index);
+		}
+
+		while(vertexAttribArraysPendingEnable)
+		{
+			int index = __builtin_ctzll(vertexAttribArraysPendingEnable);
+			uint64_t mask = 1ULL << index;
+			vertexAttribArraysPendingEnable &= ~mask;
+			currentlyEnabledVertexAttribArrays |= mask;
+			glEnableVertexAttribArray(index);
+		}
+#endif
+	}
+
 	void setTextureFormat(TextureFormat::Enum _format, GLenum _internalFmt, GLenum _fmt, GLenum _type = GL_ZERO)
 	{
 		TextureFormatInfo& tfi = s_textureFormat[_format];
@@ -1609,11 +1673,14 @@ namespace bgfx { namespace gl
 		, GLsizei _dim = 16
 		)
 	{
-#if BX_PLATFORM_EMSCRIPTEN
+//#if BX_PLATFORM_EMSCRIPTEN
 		// On web platform read the validity of textures based on the available GL context and extensions
 		// to avoid developer unfriendly console error noise that would come from probing.
-		return isTextureFormatValidPerSpec(_format, _srgb, _mipAutogen, _array, _dim);
-#else
+//		return isTextureFormatValidPerSpec(_format, _srgb, _mipAutogen, _array, _dim);
+//#else
+		if (!isTextureFormatValidPerSpec(_format, _srgb, _mipAutogen, _array, _dim))
+			return false;
+
 		// On other platforms probe the supported textures.
 		const TextureFormatInfo& tfi = s_textureFormat[_format];
 		GLenum internalFmt = _srgb
@@ -1622,6 +1689,8 @@ namespace bgfx { namespace gl
 			;
 		if (GL_ZERO == internalFmt)
 		{
+			if (isTextureFormatValidPerSpec(_format, _srgb, _mipAutogen, _array, _dim))
+				printf("SPEC DISAGREES %d srgb=%d, spec says yes, practice says no!\n", _format, _srgb);
 			return false;
 		}
 
@@ -1669,8 +1738,11 @@ namespace bgfx { namespace gl
 
 		GL_CHECK(glDeleteTextures(1, &id) );
 
+		if ((0 == err) != isTextureFormatValidPerSpec(_format, _srgb, _mipAutogen, _array, _dim))
+			printf("SPEC DISAGREES %d srgb=%d, spec says %d practice says %d !\n", _format, _srgb, !(0 == err), (0 == err));
+
 		return 0 == err;
-#endif
+//#endif
 	}
 
 	static bool isImageFormatValid(TextureFormat::Enum _format, GLsizei _dim = 16)
@@ -1799,12 +1871,15 @@ namespace bgfx { namespace gl
 		, GLsizei _dim = 16
 		)
 	{
-#if BX_PLATFORM_EMSCRIPTEN
+//#if BX_PLATFORM_EMSCRIPTEN
 		// On web platform read the validity of framebuffers based on the available GL context and extensions
 		// to avoid developer unfriendly console error noise that would come from probing.
-		return isFramebufferFormatValidPerSpec(_format, _srgb, _writeOnly, _dim);
-#else
+//		return isFramebufferFormatValidPerSpec(_format, _srgb, _writeOnly, _dim);
+//#else
 		// On other platforms probe the supported textures.
+		if (!isFramebufferFormatValidPerSpec(_format, _srgb, _writeOnly, _dim))
+			return false;
+
 		const TextureFormatInfo& tfi = s_textureFormat[_format];
 		GLenum internalFmt = _srgb
 			? tfi.m_internalFmtSrgb
@@ -1812,6 +1887,8 @@ namespace bgfx { namespace gl
 			;
 		if (GL_ZERO == internalFmt)
 		{
+			if (isFramebufferFormatValidPerSpec(_format, _srgb, _writeOnly, _dim))
+				printf("RB SPEC DISAGREES %d srgb=%d! spec says yes writeonly=%d\n", _format, _srgb, _writeOnly);
 			return false;
 		}
 
@@ -1830,6 +1907,10 @@ namespace bgfx { namespace gl
 			glDeleteRenderbuffers(1, &rbo);
 
 			GLenum err = getGlError();
+
+			if ((0 == err) != isFramebufferFormatValidPerSpec(_format, _srgb, _writeOnly, _dim))
+				printf("RB SPEC DISAGREES %d srgb=%d! spec says %d practice says %d writeonly=%d\n", _format, _srgb, !(0 == err), (0 == err), _writeOnly);
+
 			return 0 == err;
 		}
 
@@ -1883,8 +1964,11 @@ namespace bgfx { namespace gl
 
 		GL_CHECK(glDeleteTextures(1, &id) );
 
+		if ((GL_FRAMEBUFFER_COMPLETE == err) != isFramebufferFormatValidPerSpec(_format, _srgb, _writeOnly, _dim))
+			printf("RB SPEC DISAGREES %d srgb=%d! spec says %d practice says %d writeonly=%d\n", _format, _srgb, !(GL_FRAMEBUFFER_COMPLETE == err), (GL_FRAMEBUFFER_COMPLETE == err), _writeOnly);
+
 		return GL_FRAMEBUFFER_COMPLETE == err;
-#endif
+//#endif
 	}
 
 	static void getFilters(uint32_t _flags, bool _hasMips, GLenum& _magFilter, GLenum& _minFilter)
@@ -2326,6 +2410,15 @@ namespace bgfx { namespace gl
 						setTextureFormat(TextureFormat::D32F,  GL_DEPTH_COMPONENT32F, GL_DEPTH_COMPONENT, GL_FLOAT);
 						setTextureFormat(TextureFormat::D0S8,  GL_STENCIL_INDEX8, GL_STENCIL_INDEX, GL_UNSIGNED_BYTE); // Only works as renderbuffer, not as texture
 					}
+
+					/*
+					if (!s_extension[Extension::EXT_sRGB].m_supported)//emscripten_webgl_enable_extension(m_glctx.m_context, "EXT_sRGB"))
+					{
+						s_textureFormat[TextureFormat::RGB8].m_internalFmtSrgb = GL_ZERO;
+						s_textureFormat[TextureFormat::RGBA8].m_internalFmtSrgb = GL_ZERO;
+						s_textureFormat[TextureFormat::BGRA8].m_internalFmtSrgb = GL_ZERO;
+					}
+					*/
 				}
 
 				if (BX_ENABLED(BGFX_CONFIG_RENDERER_OPENGL)
@@ -3942,8 +4035,22 @@ namespace bgfx { namespace gl
 
 				switch (type)
 				{
+#if BX_PLATFORM_EMSCRIPTEN
+				// For WebAssembly the array forms glUniform1iv/glUniform4fv are much slower compared to glUniform1i/glUniform4f
+				// since they need to marshal an array over from Wasm to JS, so optimize the case when there is exactly one
+				// uniform to upload.
+				case UniformType::Sampler:
+					if (num > 1) glUniform1iv(loc, num, (int*)data);
+					else glUniform1i(loc, *(int*)data);
+					break;
+				case UniformType::Vec4:
+					if (num > 1) glUniform4fv(loc, num, (float*)data);
+					else glUniform4f(loc, ((float*)data)[0], ((float*)data)[1], ((float*)data)[2], ((float*)data)[3]);
+					break;
+#else
 				CASE_IMPLEMENT_UNIFORM(Sampler, 1iv, I, int);
 				CASE_IMPLEMENT_UNIFORM(Vec4,    4fv, F, float);
+#endif
 				CASE_IMPLEMENT_UNIFORM_T(Mat3, Matrix3fv, F, float);
 				CASE_IMPLEMENT_UNIFORM_T(Mat4, Matrix4fv, F, float);
 
@@ -4789,7 +4896,7 @@ namespace bgfx { namespace gl
 			{
 				if (UINT16_MAX != _layout.m_attributes[attr])
 				{
-					GL_CHECK(glEnableVertexAttribArray(loc) );
+					GL_CHECK(lazyEnableVertexAttribArray(loc) );
 					GL_CHECK(glVertexAttribDivisor(loc, 0) );
 
 					uint32_t baseVertex = _baseVertex*_layout.m_stride + _layout.m_offset[attr];
@@ -4819,6 +4926,7 @@ namespace bgfx { namespace gl
 				}
 			}
 		}
+		applyLazyEnabledVertexAttributes();
 	}
 
 	void ProgramGL::unbindAttributes()
@@ -4829,7 +4937,7 @@ namespace bgfx { namespace gl
 			{
 				Attrib::Enum attr = Attrib::Enum(m_used[ii]);
 				GLint loc = m_attributes[attr];
-				GL_CHECK(glDisableVertexAttribArray(loc));
+				GL_CHECK(lazyDisableVertexAttribArray(loc));
 			}
 		}
 	}
@@ -4840,7 +4948,7 @@ namespace bgfx { namespace gl
 		for (uint32_t ii = 0; 0xffff != m_instanceData[ii]; ++ii)
 		{
 			GLint loc = m_instanceData[ii];
-			GL_CHECK(glEnableVertexAttribArray(loc) );
+			GL_CHECK(lazyEnableVertexAttribArray(loc) );
 			GL_CHECK(glVertexAttribPointer(loc, 4, GL_FLOAT, GL_FALSE, _stride, (void*)(uintptr_t)baseVertex) );
 			GL_CHECK(glVertexAttribDivisor(loc, 1) );
 			baseVertex += 16;
@@ -4852,7 +4960,7 @@ namespace bgfx { namespace gl
 		for(uint32_t ii = 0; 0xffff != m_instanceData[ii]; ++ii)
 		{
 			GLint loc = m_instanceData[ii];
-			GL_CHECK(glDisableVertexAttribArray(loc));
+			GL_CHECK(lazyDisableVertexAttribArray(loc));
 		}
 	}
 

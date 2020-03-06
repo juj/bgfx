@@ -108,37 +108,41 @@ namespace bgfx { namespace gl
 	{
 		emscripten_webgl_init_context_attributes(&s_attrs);
 
-		s_attrs.alpha = false;
+		s_attrs.alpha = true;
 		s_attrs.depth = true;
 		s_attrs.stencil = true;
 		s_attrs.enableExtensionsByDefault = true;
 
-		// let emscripten figure out the best WebGL context to create
-		s_attrs.majorVersion = 0;
-		s_attrs.majorVersion = 0;
+		int minVersion = 1;//BX_ENABLED(BGFX_CONFIG_RENDERER_OPENGLES_MIN_VERSION > 20) ? 2 : 1;
+		int maxVersion = 2;//BX_ENABLED(BGFX_CONFIG_RENDERER_OPENGLES >= 30) ? 2 : 1;
 
-		const char* canvas = (const char*) _nwh;
-
-		int context = emscripten_webgl_create_context(canvas, &s_attrs);
-
-		if (context <= 0)
+		for(int version = maxVersion; version >= minVersion; --version)
 		{
-			BX_TRACE("Failed to create WebGL context.  (Canvas handle: '%s', error %d)", canvas, (int)context);
-			return NULL;
+			s_attrs.majorVersion = version;
+			const char* canvas = (const char*) _nwh;
+			EMSCRIPTEN_WEBGL_CONTEXT_HANDLE context = emscripten_webgl_create_context(canvas, &s_attrs);
+
+			if (context)
+			{
+				int result = emscripten_webgl_make_context_current(context);
+				if (EMSCRIPTEN_RESULT_SUCCESS != result)
+				{
+					BX_TRACE("emscripten_webgl_make_context_current failed (%d)", result);
+					return NULL;
+				}
+
+				m_version = version;
+				m_context = context;
+
+				SwapChainGL* swapChain = BX_NEW(g_allocator, SwapChainGL)(context, canvas);
+
+				import(1);
+
+				return swapChain;
+			}
 		}
-
-		int result = emscripten_webgl_make_context_current(context);
-		if (EMSCRIPTEN_RESULT_SUCCESS != result)
-		{
-			BX_TRACE("emscripten_webgl_make_context_current failed (%d)", result);
-			return NULL;
-		}
-
-		SwapChainGL* swapChain = BX_NEW(g_allocator, SwapChainGL)(context, canvas);
-
-		import(1);
-
-		return swapChain;
+		BX_TRACE("Failed to create WebGL context.  (Canvas handle: '%s', error %d)", canvas, (int)context);
+		return NULL;
 	}
 
 	uint64_t GlContext::getCaps() const

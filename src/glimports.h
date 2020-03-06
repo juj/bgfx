@@ -2,7 +2,17 @@
  * Copyright 2011-2020 Branimir Karadzic. All rights reserved.
  * License: https://github.com/bkaradzic/bgfx#license-bsd-2-clause
  */
-
+/*
+#if defined(__EMSCRIPTEN__)
+// In web builds all symbols are available via direct static linkage.
+#include <GLES3/gl3.h>
+#define GL_GLEXT_PROTOTYPES
+#include <GLES2/gl2ext.h>
+#define glQueryCounter glQueryCounterEXT
+#define glGetQueryObjectiv glGetQueryObjectivEXT
+#define glGetQueryObjectui64v glGetQueryObjectui64vEXT
+#else
+*/
 #if !defined(GL_IMPORT) && !defined(GL_EXTENSION)
 #	error GL_IMPORT or GL_EXTENSION must be defined!
 #endif // !defined(GL_IMPORT) && !defined(GL_DEFINE)
@@ -673,3 +683,5 @@ GL_IMPORT______(true,  PFNGLINVALIDATEFRAMEBUFFERPROC,             glInvalidateF
 #undef GL_IMPORT_NV___
 #undef GL_IMPORT_OES__
 #undef GL_IMPORT_____x
+
+///#endif // __EMSCRIPTEN__

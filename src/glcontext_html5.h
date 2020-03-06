@@ -39,6 +39,8 @@ namespace bgfx { namespace gl
 
         SwapChainGL* m_current;
 		SwapChainGL* m_primary;
+		int /*EMSCRIPTEN_WEBGL_CONTEXT_HANDLE*/ m_context;
+		int m_version;
 	};
 } /* namespace gl */ } // namespace bgfx
 
